@@ -1,0 +1,6 @@
+# PyScript config. Paths are relative so the page works from any sub-path.
+name = "SLO and error budget calculator"
+
+[files]
+"./slo.py" = ""
+"./charts.py" = ""

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SLO &amp; error budget calculator · Matthew Prall</title>
+  <meta name="description" content="Turn an availability SLO into downtime and bad requests, then compare multi-window burn-rate alerts with a single long-window threshold. Python runs in the browser.">
+  <meta name="author" content="Matthew Prall">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f3efe6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121311" media="(prefers-color-scheme: dark)">
+  <link rel="canonical" href="https://mjprall.github.io/slo-calculator/">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="stylesheet" href="https://pyscript.net/releases/2026.7.3/core.css">
+  <script type="module" src="https://pyscript.net/releases/2026.7.3/core.js"></script>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <a class="skip" href="#calculator">Skip to the calculator</a>
+
+  <div id="loading" class="loading" role="status" aria-live="polite">
+    <div class="loading-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2>Starting Python in your browser</h2>
+      <p>The calculator is plain Python. The first visit downloads the runtime and then caches it.</p>
+      <p id="loading-slow" class="note" hidden>Still working. A slow network can take half a minute the first time.</p>
+      <p id="loading-error" class="error" hidden></p>
+      <noscript><p class="error">This page needs JavaScript so Python can run via WebAssembly.</p></noscript>
+    </div>
+  </div>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="wordmark" href="https://mjprall.github.io/">Matthew Prall</a>
+      <nav aria-label="On this page">
+        <ul class="nav">
+          <li><a href="#calculator">Calculator</a></li>
+          <li><a href="#status">Budget</a></li>
+          <li><a href="#simulator">Alerts</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <p class="eyebrow">Site reliability</p>
+    <h1>SLO &amp; error budget calculator</h1>
+    <p class="lede">An availability target is a budget of failure. Pick a target and a window, see the downtime and bad requests it allows, then watch multi-window burn-rate alerts fire and reset on a synthetic incident.</p>
+
+    <form id="calculator">
+      <div class="fields">
+        <fieldset>
+          <legend>Service level indicator</legend>
+          <div class="choices">
+            <label><input type="radio" name="sli" id="sli-requests" value="requests" checked> Availability, by requests</label>
+            <label><input type="radio" name="sli" id="sli-time" value="time"> Availability, by time</label>
+          </div>
+        </fieldset>
+
+        <fieldset class="wide">
+          <legend>SLO target</legend>
+          <div class="choices">
+            <label><input type="radio" name="slo" id="slo-99" value="99"> 99%</label>
+            <label><input type="radio" name="slo" id="slo-99-5" value="99.5"> 99.5%</label>
+            <label><input type="radio" name="slo" id="slo-99-9" value="99.9" checked> 99.9%</label>
+            <label><input type="radio" name="slo" id="slo-99-95" value="99.95"> 99.95%</label>
+            <label><input type="radio" name="slo" id="slo-99-99" value="99.99"> 99.99%</label>
+            <label><input type="radio" name="slo" id="slo-custom-radio" value="custom"> Custom</label>
+          </div>
+          <label class="field" for="slo-custom">Custom percent
+            <input id="slo-custom" type="number" min="0" max="100" step="0.001" value="99.9" inputmode="decimal">
+          </label>
+        </fieldset>
+
+        <label class="field" for="window">Window
+          <select id="window">
+            <option value="7">7 days</option>
+            <option value="28">28 days</option>
+            <option value="30" selected>30 days</option>
+            <option value="90">90 days</option>
+          </select>
+        </label>
+
+        <label class="field" for="rps">Traffic, requests per second
+          <input id="rps" type="number" min="0" step="any" value="100" inputmode="decimal">
+        </label>
+      </div>
+      <p class="note">The request rate turns the budget into a count of bad requests. Burn rate does not depend on it: it compares the fraction of budget you have spent with the fraction of the window that has passed.</p>
+
+      <section id="allowance" aria-labelledby="allowance-title">
+        <h2 id="allowance-title">The budget this SLO allows</h2>
+        <p class="explain">The error budget is the unreliability you still have room for. One hundred percent minus the SLO, times the window, is the downtime. The same fraction of requests is the count of bad requests.</p>
+        <div id="allowance-body">
+          <p class="summary">Numbers show up here once Python has started.</p>
+        </div>
+      </section>
+
+      <section id="status" aria-labelledby="status-title">
+        <h2 id="status-title">Where the budget stands</h2>
+        <p class="explain">A burn rate of 1× spends the budget exactly at the end of the window. 2× spends it twice as fast, so it would run out halfway through. Enter what you have observed so far.</p>
+        <div class="fields">
+          <label class="field" for="bad"><span id="bad-caption">Bad requests so far</span>
+            <input id="bad" type="number" min="0" step="any" value="0" inputmode="decimal">
+          </label>
+          <div class="field split">
+            <label for="elapsed">Elapsed time
+              <input id="elapsed" type="number" min="0" step="any" value="1" inputmode="decimal">
+            </label>
+            <label for="unit">Unit
+              <select id="unit">
+                <option value="minutes">minutes</option>
+                <option value="hours">hours</option>
+                <option value="days" selected>days</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div id="status-readout">
+          <p class="summary">The burn rate shows up here once Python has started.</p>
+        </div>
+      </section>
+
+      <section id="simulator" aria-labelledby="simulator-title">
+        <h2 id="simulator-title">Burn-rate alerts</h2>
+        <p class="explain">These are the multi-window, multi-burn-rate alerts from the <a href="https://sre.google/workbook/alerting-on-slos/" rel="noopener noreferrer" target="_blank">Google SRE workbook<span class="visually-hidden"> (opens in a new tab)</span></a>. An alert fires only when a long window and a short window are both over the threshold. The long window finds a burn large enough to matter. The short window has to agree, and it goes quiet soon after the errors stop, so the page resets. The comparison alert uses the same threshold on the long window only, so it stays open until those bad minutes age out.</p>
+        <p class="explain">Lookbacks scale with the window you picked. The multipliers stay 14.4×, 6×, and 1×, which is 2%, 5%, and 10% of the budget. On a 30-day SLO that is 1 hour checked against 5 minutes, 6 hours checked against 30 minutes, and 3 days checked against 6 hours.</p>
+        <ul id="policy" class="policy"></ul>
+
+        <fieldset>
+          <legend>Incidents to inject</legend>
+          <div class="checks">
+            <label class="check" for="inc-outage">
+              <input id="inc-outage" type="checkbox" checked>
+              <span><strong>Sharp outage.</strong> Every request fails for 25 minutes, starting 15% of the way into the window.</span>
+            </label>
+            <label class="check" for="inc-degradation">
+              <input id="inc-degradation" type="checkbox" checked>
+              <span><strong>Slow degradation.</strong> Errors sit at 8× the allowed rate for 12 hours, starting at 40% of the window. Fast enough to trip 6×, not 14.4×.</span>
+            </label>
+            <label class="check" for="inc-flap">
+              <input id="inc-flap" type="checkbox" checked>
+              <span><strong>Flapping.</strong> Three minutes of outage, twelve minutes healthy, repeating for 6 hours, starting at 70% of the window.</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="transport">
+          <button id="play" type="button" disabled aria-pressed="false">Play</button>
+          <label class="field" for="speed">Playback
+            <select id="speed">
+              <option value="0.0166667">Across the window in 60 seconds</option>
+              <option value="0.05" selected>Across the window in 20 seconds</option>
+              <option value="0.125">Across the window in 8 seconds</option>
+            </select>
+          </label>
+          <label class="field scrub-field" for="scrub">Time
+            <input id="scrub" type="range" min="0" max="43200" step="1" value="43200" aria-describedby="scrub-readout">
+          </label>
+        </div>
+        <p id="scrub-readout" class="summary">The playhead sits at the end of the window.</p>
+        <p id="firing-now" class="firing" aria-live="polite"></p>
+
+        <figure class="chart-block">
+          <figcaption>
+            <h3>Error budget remaining</h3>
+            <p class="explain">100% is an untouched budget. 0% is exhausted. Below zero, the service has spent more than the SLO allows. The line is one-minute buckets of the synthetic stream.</p>
+          </figcaption>
+          <div class="chart">
+            <div id="burndown"></div>
+            <div id="burndown-cursor" class="cursor" hidden></div>
+          </div>
+          <p id="burndown-text" class="visually-hidden"></p>
+        </figure>
+
+        <figure class="chart-block">
+          <figcaption>
+            <h3>Burn rate</h3>
+            <p class="explain">Each line is the long window for that alert, on a log scale so a 1× ticket and a 1,000× outage can share an axis. Dashed lines are the thresholds. A point is missing until that long window is full of data.</p>
+            <ul class="legend">
+              <li><span class="swatch fast"></span> Fast burn, 14.4×</li>
+              <li><span class="swatch slow"></span> Slow burn, 6×</li>
+              <li><span class="swatch ticket"></span> Ticket, 1×</li>
+            </ul>
+          </figcaption>
+          <div class="chart">
+            <div id="burn"></div>
+            <div id="burn-cursor" class="cursor" hidden></div>
+          </div>
+          <p id="burn-text" class="visually-hidden"></p>
+        </figure>
+
+        <figure class="chart-block">
+          <figcaption>
+            <h3>When alerts fire and reset</h3>
+            <p class="explain">Solid bars are the multi-window alert. Hatched bars are the same threshold on the long window alone. For a tight SLO such as 99.9%, one bad minute inside the short window keeps the fast page open, so it outlasts a short blip by a few minutes. The long window alone stays open until the outage ages out, including across the healthy gaps of a flap.</p>
+          </figcaption>
+          <div class="chart">
+            <div id="timeline"></div>
+            <div id="timeline-cursor" class="cursor" hidden></div>
+          </div>
+          <p id="timeline-text" class="visually-hidden"></p>
+        </figure>
+
+        <div class="table-wrap" id="compare"></div>
+
+        <details>
+          <summary>When the multi-window alerts fired</summary>
+          <div id="transitions"></div>
+        </details>
+      </section>
+    </form>
+    <p id="live-summary" class="visually-hidden" aria-live="polite"></p>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <p class="footer-note">Synthetic requests, counted in your browser with Python and PyScript. Not a production monitor.</p>
+      <ul class="footer-links">
+        <li><a href="https://mjprall.github.io/">Back to the site</a></li>
+        <li><a href="https://github.com/mjprall/slo-calculator" rel="noopener noreferrer" target="_blank">Source<span class="visually-hidden"> on GitHub (opens in a new tab)</span></a></li>
+      </ul>
+    </div>
+  </footer>
+
+  <script>
+    setTimeout(function () {
+      var slow = document.getElementById("loading-slow");
+      var loading = document.getElementById("loading");
+      if (slow && loading && !loading.hidden) slow.hidden = false;
+    }, 12000);
+  </script>
+  <script type="py" src="./app.py" config="./pyscript.toml"></script>
+</body>
+</html>
